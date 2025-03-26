@@ -212,7 +212,7 @@ api_key_template = """
     <div class="container">
         <h1>Research Assistant</h1>
         <p>Please enter your Groq API key to access the Research Assistant.</p>
-        <form method="post" action="/">
+        <form method="post" action="/api-key">
             <div class="form-group">
                 <label for="api_key">Groq API Key:</label>
                 <input type="password" id="api_key" name="api_key" required>
