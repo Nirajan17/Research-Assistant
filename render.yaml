@@ -1,6 +1,7 @@
 services:
   - type: web
     name: research-assistant
-    env: python
+    runtime: python3.11
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn research-assistant:app --host 0.0.0.0 --port $PORT 
+    startCommand: uvicorn research-assistant:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true 

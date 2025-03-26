@@ -38,7 +38,7 @@ def get_model(api_key: str):
         raise ValueError("API key is required")
     return ChatGroq(
         groq_api_key=api_key,
-        model_name="mixtral-8x7b-32768",
+        model_name="llama3-70b-8192",
         temperature=0.7,
         max_tokens=32768,
         top_p=1,
