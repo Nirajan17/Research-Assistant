@@ -17,17 +17,21 @@ import secrets
 
 load_dotenv()
 
-model = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    temperature=0,
-    max_tokens=None,
-    timeout=None,
-    max_retries=2,
-)
+# Initialize DuckDuckGo search
+ddg_search = DuckDuckGoSearchAPIWrapper()
+
+def get_model():
+    if "GROQ_API_KEY" not in os.environ:
+        raise ValueError("GROQ_API_KEY environment variable is not set")
+    return ChatGroq(
+        model="llama-3.3-70b-versatile",
+        temperature=0,
+        max_tokens=None,
+        timeout=None,
+        max_retries=2,
+    )
 
 RESULTS_PER_QUESTION = 2
-
-ddg_search = DuckDuckGoSearchAPIWrapper()
 
 def webSearch(query: str, nums_results: int=RESULTS_PER_QUESTION):
     results = ddg_search.results(query, nums_results)
@@ -40,7 +44,8 @@ Using the above text, answer in short the following question:
 -----------
 if the question cannot be answered using the text, imply summarize the text. Include all factual information, numbers, stats etc if available."""
 
-summarize_prompt = ChatPromptTemplate.from_template(template=template)
+def get_summarize_prompt():
+    return ChatPromptTemplate.from_template(template=template)
 
 def scrapeText(url: str):
     try:
@@ -55,15 +60,17 @@ def scrapeText(url: str):
         print(e)
         return f"Failed to retrieve the webpage: {e}"
 
-scrape_and_summarize_chain = RunnablePassthrough.assign(
-    summary = RunnablePassthrough.assign(
-    context = lambda x: scrapeText(x["url"])[:5000]
-) | summarize_prompt | model | StrOutputParser()
-) | (lambda x: f"URL: {x['url']} \n\nSummary: {x['summary']}")
+def get_scrape_and_summarize_chain(model):
+    return RunnablePassthrough.assign(
+        summary = RunnablePassthrough.assign(
+        context = lambda x: scrapeText(x["url"])[:5000]
+    ) | get_summarize_prompt() | model | StrOutputParser()
+    ) | (lambda x: f"URL: {x['url']} \n\nSummary: {x['summary']}")
 
-web_search_chain = RunnablePassthrough.assign(
-    urls = lambda x: webSearch(x["question"])
-)| (lambda x: [{"question": x["question"], "url": u} for u in x["urls"]]) | scrape_and_summarize_chain.map()
+def get_web_search_chain(model):
+    return RunnablePassthrough.assign(
+        urls = lambda x: webSearch(x["question"])
+    )| (lambda x: [{"question": x["question"], "url": u} for u in x["urls"]]) | get_scrape_and_summarize_chain(model).map()
 
 SEARCH_PROMPT = ChatPromptTemplate.from_messages(
     [
@@ -77,7 +84,8 @@ SEARCH_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-search_question_chain = SEARCH_PROMPT | model | StrOutputParser() | json.loads
+def get_search_question_chain(model):
+    return SEARCH_PROMPT | model | StrOutputParser() | json.loads
 
 WRITER_SYSTEM_TEMPLATE = "You are an AI critical thinker research assistant. Your sole purpose is to write well written, critically acclaimed, objective and structured reports on given text."
 
@@ -95,12 +103,13 @@ Write all used source urls at the end of the report, and make sure to not add du
 You must write the report in apa format.
 Please do your best, this is very important to my career."""
 
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", WRITER_SYSTEM_TEMPLATE),
-        ("user", RESEARCH_REPORT_TEMPLATE),
-    ]
-)
+def get_prompt():
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", WRITER_SYSTEM_TEMPLATE),
+            ("user", RESEARCH_REPORT_TEMPLATE),
+        ]
+    )
 
 def collapse_lists(list_of_lists):
     content = []
@@ -108,10 +117,12 @@ def collapse_lists(list_of_lists):
         content.append("\n\n".join(l))
     return "\n\n".join(content)
 
-chain = RunnablePassthrough.assign(
-    research_summary = web_search_chain | collapse_lists
-) | prompt | model | StrOutputParser()
+def get_chain(model):
+    return RunnablePassthrough.assign(
+        research_summary = get_web_search_chain(model) | collapse_lists
+    ) | get_prompt() | model | StrOutputParser()
 
+# FastAPI app setup
 app = FastAPI(
     title="Research Assistant",
     version="1.0",
@@ -225,99 +236,15 @@ async def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/")
 
-# Create the research form template
-research_template = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Research Assistant - Ask a Question</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #333;
-            margin-bottom: 20px;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            color: #666;
-        }
-        textarea {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-            min-height: 100px;
-            resize: vertical;
-        }
-        button {
-            background-color: #007bff;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #0056b3;
-        }
-        .logout-button {
-            background-color: #dc3545;
-            margin-left: 10px;
-        }
-        .logout-button:hover {
-            background-color: #c82333;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Research Assistant</h1>
-        <form method="post" action="/research">
-            <div class="form-group">
-                <label for="question">Enter your research question:</label>
-                <textarea id="question" name="question" required placeholder="What would you like to research?"></textarea>
-            </div>
-            <button type="submit">Research</button>
-            <a href="/logout" class="logout-button" style="text-decoration: none; color: white; display: inline-block;">Logout</a>
-        </form>
-    </div>
-</body>
-</html>
-"""
-
-# Save the research template
-with open("templates/research.html", "w") as f:
-    f.write(research_template)
-
-@app.get("/research", include_in_schema=False)
-async def research_page(request: Request):
-    if "api_key" not in request.session:
-        return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse("research.html", {"request": request})
-
 @app.post("/research")
 async def research(request: Request, question: str = Form(...)):
     if "api_key" not in request.session:
         return RedirectResponse(url="/", status_code=303)
     
     try:
+        # Initialize model only when needed
+        model = get_model()
+        chain = get_chain(model)
         response = chain.invoke({"question": question})
         return HTMLResponse(f"""
         <!DOCTYPE html>
