@@ -14,21 +14,35 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 import secrets
+from fastapi.middleware.cors import CORSMiddleware
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from typing import List, Optional
+from fastapi.responses import JSONResponse
+from fastapi import Depends
 
 load_dotenv()
 
 # Initialize DuckDuckGo search
 ddg_search = DuckDuckGoSearchAPIWrapper()
 
-def get_model():
-    if "GROQ_API_KEY" not in os.environ:
-        raise ValueError("GROQ_API_KEY environment variable is not set")
+def get_model(api_key: str):
+    if not api_key:
+        raise ValueError("API key is required")
     return ChatGroq(
-        model="llama-3.3-70b-versatile",
-        temperature=0,
-        max_tokens=None,
-        timeout=None,
-        max_retries=2,
+        groq_api_key=api_key,
+        model_name="mixtral-8x7b-32768",
+        temperature=0.7,
+        max_tokens=32768,
+        top_p=1,
+        verbose=True
     )
 
 RESULTS_PER_QUESTION = 2
@@ -130,7 +144,7 @@ app = FastAPI(
 )
 
 # Add session middleware
-app.add_middleware(SessionMiddleware, secret_key=secrets.token_hex(32))
+app.add_middleware(SessionMiddleware, secret_key=secrets.token_urlsafe(32), session_cookie="research_session", max_age=3600)
 
 # Create templates directory and add HTML template
 templates = Jinja2Templates(directory="templates")
@@ -217,147 +231,66 @@ api_key_template = """
 with open("templates/api_key.html", "w") as f:
     f.write(api_key_template)
 
-@app.get("/", include_in_schema=False)
-async def root(request: Request):
-    if "api_key" not in request.session:
-        return templates.TemplateResponse("api_key.html", {"request": request})
-    return RedirectResponse(url="/research")
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse("api_key.html", {"request": request})
 
-@app.post("/", include_in_schema=False)
-async def verify_api_key(request: Request, api_key: str = Form(...)):
-    # Store the API key in session
+@app.post("/api-key")
+async def set_api_key(request: Request):
+    form_data = await request.form()
+    api_key = form_data.get("api_key")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API key is required")
+    
+    # Store the API key in the session
     request.session["api_key"] = api_key
-    # Set the environment variable
-    os.environ["GROQ_API_KEY"] = api_key
-    return RedirectResponse(url="/research", status_code=303)
+    return templates.TemplateResponse("research.html", {"request": request})
 
-@app.get("/logout", include_in_schema=False)
+@app.get("/logout")
 async def logout(request: Request):
+    # Clear the session
     request.session.clear()
-    return RedirectResponse(url="/")
+    return templates.TemplateResponse("api_key.html", {"request": request})
 
 @app.post("/research")
-async def research(request: Request, question: str = Form(...)):
-    if "api_key" not in request.session:
-        return RedirectResponse(url="/", status_code=303)
+async def research(request: Request):
+    # Get the API key from the session
+    api_key = request.session.get("api_key")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API key not found in session")
     
+    form_data = await request.form()
+    question = form_data.get("question")
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required")
+
     try:
-        # Initialize model only when needed
-        model = get_model()
-        chain = get_chain(model)
-        response = chain.invoke({"question": question})
-        return HTMLResponse(f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Research Results</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    max-width: 800px;
-                    margin: 0 auto;
-                    padding: 20px;
-                    background-color: #f5f5f5;
-                }}
-                .container {{
-                    background-color: white;
-                    padding: 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                }}
-                .question {{
-                    color: #333;
-                    margin-bottom: 20px;
-                }}
-                .response {{
-                    white-space: pre-wrap;
-                    line-height: 1.6;
-                }}
-                .back-button {{
-                    display: inline-block;
-                    margin-top: 20px;
-                    padding: 10px 20px;
-                    background-color: #007bff;
-                    color: white;
-                    text-decoration: none;
-                    border-radius: 4px;
-                }}
-                .back-button:hover {{
-                    background-color: #0056b3;
-                }}
-                .logout-button {{
-                    background-color: #dc3545;
-                    margin-left: 10px;
-                }}
-                .logout-button:hover {{
-                    background-color: #c82333;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>Research Results</h1>
-                <div class="question">
-                    <strong>Question:</strong> {question}
-                </div>
-                <div class="response">
-                    {response}
-                </div>
-                <a href="/research" class="back-button">Ask Another Question</a>
-                <a href="/logout" class="back-button logout-button">Logout</a>
-            </div>
-        </body>
-        </html>
-        """)
+        # Get the model with the API key from session
+        model = get_model(api_key)
+        
+        # Create the final chain
+        final_chain = get_chain(model)
+        
+        # Run the chain
+        result = final_chain.invoke({"question": question})
+        
+        return templates.TemplateResponse(
+            "research.html",
+            {
+                "request": request,
+                "result": result,
+                "question": question
+            }
+        )
     except Exception as e:
-        return HTMLResponse(f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Error</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    max-width: 600px;
-                    margin: 0 auto;
-                    padding: 20px;
-                    background-color: #f5f5f5;
-                }}
-                .container {{
-                    background-color: white;
-                    padding: 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                }}
-                .error {{
-                    color: red;
-                    margin-top: 10px;
-                }}
-                .back-button {{
-                    display: inline-block;
-                    margin-top: 20px;
-                    padding: 10px 20px;
-                    background-color: #007bff;
-                    color: white;
-                    text-decoration: none;
-                    border-radius: 4px;
-                }}
-                .back-button:hover {{
-                    background-color: #0056b3;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>Error</h1>
-                <div class="error">
-                    An error occurred: {str(e)}
-                </div>
-                <a href="/research" class="back-button">Back to Research</a>
-            </div>
-        </body>
-        </html>
-        """)
+        return templates.TemplateResponse(
+            "research.html",
+            {
+                "request": request,
+                "error": str(e),
+                "question": question
+            }
+        )
 
 if __name__ == "__main__":
     import uvicorn
