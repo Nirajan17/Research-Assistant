@@ -45,7 +45,7 @@ def get_model(api_key: str):
         verbose=True
     )
 
-RESULTS_PER_QUESTION = 2
+RESULTS_PER_QUESTION = 3
 
 def webSearch(query: str, nums_results: int=RESULTS_PER_QUESTION):
     results = ddg_search.results(query, nums_results)
@@ -90,7 +90,7 @@ SEARCH_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "user",
-            "Write 2 google search queries to search online that are form an"
+            "Write 3 google search queries to search online that are form an"
             "objective opinion from the following: {question}\n"
             "You must respond with a list of strings in the following format"
             '["query1", "query2", "query3"]',
