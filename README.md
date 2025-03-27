@@ -17,7 +17,7 @@ A powerful AI-powered research assistant built with FastAPI and Groq LLM that he
 
 - **Backend**: FastAPI
 - **AI/ML**: 
-  - Groq LLM (Mixtral-8x7b-32768)
+  - Groq LLM (lama-3.3-70b-versatile)
   - LangChain
 - **Frontend**: 
   - HTML
